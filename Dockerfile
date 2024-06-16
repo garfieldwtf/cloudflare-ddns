@@ -1,5 +1,5 @@
 # Use the official Alpine image as a base
-FROM --platform=linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/ppc64le alpine:latest
+FROM alpine:latest
 
 # Install necessary packages: tailscale, openrc, and bash in a single layer
 RUN apk update &&\
