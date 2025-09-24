@@ -136,15 +136,12 @@ jobs:
           linux/ppc64le
         push: true
         tags: |
-          # Docker Hub tags
           ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}:latest
           ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}:386
           ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}:x64
           ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}:ppc64
           ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}:armv7
           ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}:arm
-          
-          # Quay.io tags (same structure)
           ${{ env.REGISTRY_QUAY }}/${{ env.QUAY_IMAGE_NAME }}:latest
           ${{ env.REGISTRY_QUAY }}/${{ env.QUAY_IMAGE_NAME }}:386
           ${{ env.REGISTRY_QUAY }}/${{ env.QUAY_IMAGE_NAME }}:x64
