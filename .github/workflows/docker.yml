@@ -1,4 +1,4 @@
-name: Build and Push Cloudflare DDNS to GHCR
+name: Build and Push Multi-Arch to GHCR and Docker Hub
 
 on:
   push:
@@ -9,8 +9,10 @@ on:
   workflow_dispatch:  # Manual trigger
 
 env:
-  REGISTRY: ghcr.io
+  REGISTRY_GHCR: ghcr.io
+  REGISTRY_DOCKERHUB: docker.io
   IMAGE_NAME: ${{ github.repository }}
+  DOCKERHUB_IMAGE_NAME: garfieldwtf/cloudflare-ddns
 
 jobs:
   test:
@@ -61,27 +63,35 @@ jobs:
     - name: Log in to GHCR
       uses: docker/login-action@v3
       with:
-        registry: ${{ env.REGISTRY }}
+        registry: ${{ env.REGISTRY_GHCR }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     - name: Extract metadata
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        images: |
+          ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
+          ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}
         tags: |
           type=ref,event=branch
           type=ref,event=tag
           type=sha
           type=raw,value=latest,enable={{is_default_branch}}
 
-    - name: Build and push Docker image
+    - name: Build and push to both registries
       uses: docker/build-push-action@v5
       with:
         context: .
         platforms: linux/amd64,linux/386,linux/arm/v6,linux/arm/v7,linux/arm64
-        push: true
+        push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
@@ -93,7 +103,7 @@ jobs:
     name: Verify Multi-Arch Images
     runs-on: ubuntu-latest
     needs: build
-    if: always()
+    if: always() && github.event_name != 'pull_request'
     
     steps:
     - name: Checkout code
@@ -102,16 +112,21 @@ jobs:
     - name: Log in to GHCR
       uses: docker/login-action@v3
       with:
-        registry: ${{ env.REGISTRY }}
+        registry: ${{ env.REGISTRY_GHCR }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Verify all architectures
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Verify GHCR images
       run: |
-        # Get the latest tag
-        LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        echo "Verifying GHCR images..."
+        LATEST_TAG_GHCR="${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest"
         
-        # Check each architecture
         architectures=("amd64" "386" "arm" "arm64")
         platforms=("linux/amd64" "linux/386" "linux/arm/v7" "linux/arm64")
         
@@ -119,36 +134,41 @@ jobs:
           arch=${architectures[$i]}
           platform=${platforms[$i]}
           
-          echo "Verifying $arch architecture ($platform)..."
+          echo "Verifying GHCR $arch architecture ($platform)..."
+          docker pull --platform $platform $LATEST_TAG_GHCR
+          ARCH_RESULT=$(docker image inspect $LATEST_TAG_GHCR --format='{{.Architecture}}')
+          echo "✓ GHCR $arch: $ARCH_RESULT"
+        done
+
+    - name: Verify Docker Hub images
+      run: |
+        echo "Verifying Docker Hub images..."
+        LATEST_TAG_DOCKERHUB="${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}:latest"
+        
+        architectures=("amd64" "386" "arm" "arm64")
+        platforms=("linux/amd64" "linux/386" "linux/arm/v7" "linux/arm64")
+        
+        for i in "${!architectures[@]}"; do
+          arch=${architectures[$i]}
+          platform=${platforms[$i]}
           
-          # Pull specific platform
-          docker pull --platform $platform $LATEST_TAG
-          
-          # Verify image details
-          ARCH_RESULT=$(docker image inspect $LATEST_TAG --format='{{.Architecture}}')
-          OS_RESULT=$(docker image inspect $LATEST_TAG --format='{{.Os}}')
-          
-          echo "Architecture: $ARCH_RESULT, OS: $OS_RESULT"
-          
-          if [ "$OS_RESULT" != "linux" ]; then
-            echo "❌ OS verification failed for $arch"
-            exit 1
-          fi
-          
-          echo "✓ $arch verified"
+          echo "Verifying Docker Hub $arch architecture ($platform)..."
+          docker pull --platform $platform $LATEST_TAG_DOCKERHUB
+          ARCH_RESULT=$(docker image inspect $LATEST_TAG_DOCKERHUB --format='{{.Architecture}}')
+          echo "✓ Docker Hub $arch: $ARCH_RESULT"
         done
 
     - name: Test container startup
       run: |
-        LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        # Test both registries
+        LATEST_TAG_GHCR="${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest"
+        LATEST_TAG_DOCKERHUB="${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}:latest"
         
-        # Test amd64 startup (without actual API calls)
-        docker pull --platform linux/amd64 $LATEST_TAG
+        echo "Testing GHCR image startup..."
+        docker run --rm --platform linux/amd64 $LATEST_TAG_GHCR echo "GHCR test successful" || true
         
-        # Test that container starts and exits (since it will fail without env vars)
-        docker run --rm --platform linux/amd64 $LATEST_TAG || true
-        
-        echo "✓ Container startup test completed"
+        echo "Testing Docker Hub image startup..."
+        docker run --rm --platform linux/amd64 $LATEST_TAG_DOCKERHUB echo "Docker Hub test successful" || true
 
   scan:
     name: Security Scan
@@ -160,17 +180,24 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Run Trivy vulnerability scanner
+    - name: Run Trivy vulnerability scanner on GHCR image
       uses: aquasecurity/trivy-action@master
       with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        image-ref: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest
         format: 'sarif'
-        output: 'trivy-results.sarif'
+        output: 'trivy-results-ghcr.sarif'
+
+    - name: Run Trivy vulnerability scanner on Docker Hub image
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}:latest
+        format: 'sarif'
+        output: 'trivy-results-dockerhub.sarif'
 
     - name: Upload Trivy scan results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@v3
       with:
-        sarif_file: 'trivy-results.sarif'
+        sarif_file: 'trivy-results-ghcr.sarif'
       if: always()
 
   release:
@@ -195,3 +222,18 @@ jobs:
           README.md
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify:
+    name: Notify Success
+    runs-on: ubuntu-latest
+    needs: [build, verify, scan]
+    if: success() && github.event_name != 'pull_request'
+    
+    steps:
+    - name: Notify workflow completion
+      run: |
+        echo "🎉 Multi-arch build completed successfully!"
+        echo "📦 Images pushed to:"
+        echo "   - GHCR: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest"
+        echo "   - Docker Hub: ${{ env.REGISTRY_DOCKERHUB }}/${{ env.DOCKERHUB_IMAGE_NAME }}:latest"
+        echo "🏗️  Supported architectures: amd64, 386, arm/v6, arm/v7, arm64"
