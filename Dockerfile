@@ -1,4 +1,4 @@
-# Use the official Alpine image as a base.
+# Use the official Alpine image as a base
 FROM alpine:latest
 
 # Install necessary packages: tailscale, openrc, and bash in a single layer
