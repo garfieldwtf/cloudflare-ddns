@@ -1,0 +1,70 @@
+name: PR Validation - Cloudflare DDNS
+
+on:
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  lint:
+    name: Lint and Validate
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Lint Dockerfile
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: Dockerfile
+        failure-threshold: warning
+
+    - name: Validate shell scripts
+      run: |
+        # Check shell script syntax
+        bash -n entrypoint.sh
+        echo "✓ entrypoint.sh syntax is valid"
+        
+        # Check for required commands in Dockerfile
+        if ! grep -q "cloudflare-ddns" Dockerfile; then
+          echo "❌ cloudflare-ddns package not found in Dockerfile"
+          exit 1
+        fi
+        echo "✓ Dockerfile contains required packages"
+
+    - name: Test Docker image build
+      run: |
+        docker build -t cloudflare-ddns-pr-test .
+        echo "✓ Docker image builds successfully"
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build test image
+      run: docker build -t cloudflare-ddns-test .
+
+    - name: Test container structure
+      run: |
+        # Test that required files are in the image
+        docker run --rm cloudflare-ddns-test ls -la /entrypoint.sh || exit 1
+        docker run --rm cloudflare-ddns-test ls -la /usr/bin/cloudflare-ddns || exit 1
+        docker run --rm cloudflare-ddns-test which crond || exit 1
+        echo "✓ All required files and binaries present"
+
+    - name: Test entrypoint script permissions
+      run: |
+        # Test that entrypoint script is executable
+        docker run --rm cloudflare-ddns-test test -x /entrypoint.sh || exit 1
+        echo "✓ entrypoint.sh is executable"
+
+    - name: Test multi-arch build capability
+      run: |
+        docker buildx create --use
+        docker buildx build --platform linux/amd64,linux/arm64 -t cloudflare-ddns-multi-test .
+        echo "✓ Multi-arch build test passed"
